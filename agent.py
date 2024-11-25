@@ -466,9 +466,9 @@ class DeepQLearningAgent(Agent):
             assert isinstance(iteration, int), "iteration should be an integer"
         else:
             iteration = 0
-        self._model.save_weights("{}/model_{:04d}.h5".format(file_path, iteration))
+        self._model.save_weights("{}/model_{:04d}.weights.h5".format(file_path, iteration))
         if(self._use_target_net):
-            self._target_net.save_weights("{}/model_{:04d}_target.h5".format(file_path, iteration))
+            self._target_net.save_weights("{}/model_{:04d}_target.weights.h5".format(file_path, iteration))
 
     def load_model(self, file_path='', iteration=None):
         """ load any existing models, if available """
@@ -492,9 +492,9 @@ class DeepQLearningAgent(Agent):
             assert isinstance(iteration, int), "iteration should be an integer"
         else:
             iteration = 0
-        self._model.load_weights("{}/model_{:04d}.h5".format(file_path, iteration))
+        self._model.load_weights("{}/model_{:04d}.weights.h5".format(file_path, iteration))
         if(self._use_target_net):
-            self._target_net.load_weights("{}/model_{:04d}_target.h5".format(file_path, iteration))
+            self._target_net.load_weights("{}/model_{:04d}_target.weights.h5".format(file_path, iteration))
         # print("Couldn't locate models at {}, check provided path".format(file_path))
 
     def print_models(self):
