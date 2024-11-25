@@ -2,14 +2,12 @@
 # useful to study different iterations
 
 import numpy as np
-from agent import DeepQLearningAgent, PolicyGradientAgent, \
-        AdvantageActorCriticAgent, HamiltonianCycleAgent, BreadthFirstSearchAgent
-from game_environment import Snake, SnakeNumpy
+from agent import DeepQLearningAgent
+from game_environment import Snake
 from utils import visualize_game
 import json
-# import keras.backend as K
 
-# some global variables
+# Using the same version as in training
 version = 'v17.1'
 
 with open('model_config/{:s}.json'.format(version), 'r') as f:
@@ -21,24 +19,20 @@ with open('model_config/{:s}.json'.format(version), 'r') as f:
     n_actions = m['n_actions']
     obstacles = bool(m['obstacles'])
 
-iteration_list = [163500]
+iteration_list = [2000]
 max_time_limit = 398
 
-# setup the environment
+# Initialize environment
 env = Snake(board_size=board_size, frames=frames, max_time_limit=max_time_limit,
             obstacles=obstacles, version=version)
 s = env.reset()
 n_actions = env.get_num_actions()
 
-# setup the agent
-# K.clear_session()
+# Initialize the Agent
 agent = DeepQLearningAgent(board_size=board_size, frames=frames, 
                            n_actions=n_actions, buffer_size=10, version=version)
-# agent = PolicyGradientAgent(board_size=board_size, frames=frames, n_actions=n_actions, buffer_size=10)
-# agent = AdvantageActorCriticAgent(board_size=board_size, frames=frames, n_actions=n_actions, buffer_size=10)
-# agent = HamiltonianCycleAgent(board_size=board_size, frames=frames, n_actions=n_actions, buffer_size=10)
-# agent = BreadthFirstSearchAgent(board_size=board_size, frames=frames, n_actions=n_actions, buffer_size=10)
 
+# Visualize the agent playing the game with weights from listed iterations
 for iteration in iteration_list:
     agent.load_model(file_path='models/{:s}'.format(version), iteration=iteration)
     
