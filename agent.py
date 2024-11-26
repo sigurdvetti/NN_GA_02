@@ -1,72 +1,96 @@
 """
 store all the agents here
 """
-from replay_buffer import ReplayBuffer, ReplayBufferNumpy
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
 import numpy as np
-import time
 import pickle
-from collections import deque
 import json
-import tensorflow as tf
-from tensorflow.keras.regularizers import l2
-from tensorflow.keras.optimizers import RMSprop, SGD, Adam
-import tensorflow.keras.backend as K
-from tensorflow.keras.layers import Input, Conv2D, Flatten, Dense, Softmax, MaxPool2D
-from tensorflow.keras import Model
-from tensorflow.keras.regularizers import l2
-# from tensorflow.keras.losses import Huber
+from replay_buffer import ReplayBufferNumpy
 
-def huber_loss(y_true, y_pred, delta=1):
-    """Keras implementation for huber loss
-    loss = {
-        0.5 * (y_true - y_pred)**2 if abs(y_true - y_pred) < delta
-        delta * (abs(y_true - y_pred) - 0.5 * delta) otherwise
-    }
-    Parameters
-    ----------
-    y_true : Tensor
-        The true values for the regression data
-    y_pred : Tensor
-        The predicted values for the regression data
-    delta : float, optional
-        The cutoff to decide whether to use quadratic or linear loss
+class DQNModel(nn.Module):
+    """ Deep Q Network Model to approximate the Q-values"""
+    def __init__(self, board_size, n_frames, n_actions, version):
+        super(DQNModel, self).__init__()
+        self.board_size = board_size
+        self.n_frames = n_frames
+        self.n_actions = n_actions
 
-    Returns
-    -------
-    loss : Tensor
-        loss values for all points
-    """
-    error = (y_true - y_pred)
-    quad_error = 0.5 * tf.math.square(error)
-    lin_error = delta * (tf.math.abs(error) - 0.5 * delta)
-    # quadratic error, linear error
-    return tf.where(tf.math.abs(error) < delta, quad_error, lin_error)
+        # Load the model architecture from JSON
+        with open(f'model_config/{version}.json', 'r') as f:
+            config = json.load(f)
 
-def mean_huber_loss(y_true, y_pred, delta=1):
-    """Calculates the mean value of huber loss
+        layers = []
+        in_channels = n_frames  # Starting input channels (frames)
+        
+        # Iterate through the layers specified in the JSON
+        for layer_name, layer_config in config['model'].items():
+            if "Conv2D" in layer_name:
+                # Add Conv2D layer
+                layers.append(
+                    nn.Conv2d(
+                        in_channels=in_channels,
+                        out_channels=layer_config['filters'],
+                        kernel_size=tuple(layer_config['kernel_size']),
+                        stride=layer_config.get('stride', 1),  # Default stride 1
+                        padding=layer_config.get('padding', 0)
+                    )
+                )
+                # Add activation function
+                if layer_config['activation'] == 'relu':
+                    layers.append(nn.ReLU())
+                elif layer_config['activation'] == 'sigmoid':
+                    layers.append(nn.Sigmoid())
+                elif layer_config['activation'] == 'tanh':
+                    layers.append(nn.Tanh())
+                in_channels = layer_config['filters']  # Update in_channels for next layer
+                
+            elif "Flatten" in layer_name:
+                # Add Flatten layer
+                layers.append(nn.Flatten())
 
-    Parameters
-    ----------
-    y_true : Tensor
-        The true values for the regression data
-    y_pred : Tensor
-        The predicted values for the regression data
-    delta : float, optional
-        The cutoff to decide whether to use quadratic or linear loss
+            elif "Dense" in layer_name:
+                # Compute in_channels dynamically after Flatten
+                if len(layers) > 0 and isinstance(layers[-1], nn.Flatten):
+                    dummy_input = torch.zeros(1, n_frames, board_size, board_size)
+                    with torch.no_grad():
+                        in_channels = nn.Sequential(*layers)(dummy_input).numel()
 
-    Returns
-    -------
-    loss : Tensor
-        average loss across points
-    """
-    return tf.reduce_mean(huber_loss(y_true, y_pred, delta))
+                # Add Dense (Linear) layer
+                layers.append(
+                    nn.Linear(
+                        in_features=in_channels,
+                        out_features=layer_config['units']
+                    )
+                )
+                # Add activation function for Dense layer
+                if layer_config['activation'] == 'relu':
+                    layers.append(nn.ReLU())
+                elif layer_config['activation'] == 'sigmoid':
+                    layers.append(nn.Sigmoid())
+                elif layer_config['activation'] == 'tanh':
+                    layers.append(nn.Tanh())
+                in_channels = layer_config['units']  # Update in_channels for next layer
+
+        # Store the sequential feature extractor
+        self.features = nn.Sequential(*layers)        
+        
+        # Final output layer for Q-values
+        self.q_values = nn.Linear(in_channels, n_actions)
+
+    def forward(self, x):
+        x = self.features(x)
+        return self.q_values(x)
 
 class Agent():
     """Base class for all agents
     This class extends to the following classes
     DeepQLearningAgent
-    BreadthFirstSearchAgent
-
+    <Other Agents Removed for Clarity of the Assignment>
+    
     Attributes
     ----------
     _board_size : int
@@ -122,22 +146,10 @@ class Agent():
         self._n_actions = n_actions
         self._gamma = gamma
         self._use_target_net = use_target_net
-        self._input_shape = (self._board_size, self._board_size, self._n_frames)
-        # reset buffer also initializes the buffer
+        self._input_shape = (self._n_frames, self._board_size, self._board_size) # (C, H, W)
         self.reset_buffer()
-        self._board_grid = np.arange(0, self._board_size**2)\
-                             .reshape(self._board_size, -1)
+        self._board_grid = np.arange(0, self._board_size ** 2).reshape(self._board_size, -1)
         self._version = version
-
-    def get_gamma(self):
-        """Returns the agent's gamma value
-
-        Returns
-        -------
-        _gamma : float
-            Agent's gamma value
-        """
-        return self._gamma
 
     def reset_buffer(self, buffer_size=None):
         """Reset current buffer 
@@ -152,16 +164,6 @@ class Agent():
             self._buffer_size = buffer_size
         self._buffer = ReplayBufferNumpy(self._buffer_size, self._board_size, 
                                     self._n_frames, self._n_actions)
-
-    def get_buffer_size(self):
-        """Get the current buffer size
-        
-        Returns
-        -------
-        buffer size : int
-            Current size of the buffer
-        """
-        return self._buffer.get_current_size()
 
     def add_to_buffer(self, board, action, reward, next_board, done, legal_moves):
         """Add current game step to the replay buffer
@@ -194,11 +196,8 @@ class Agent():
         iteration : int, optional
             Iteration number to tag the file name with, if None, iteration is 0
         """
-        if(iteration is not None):
-            assert isinstance(iteration, int), "iteration should be an integer"
-        else:
-            iteration = 0
-        with open("{}/buffer_{:04d}".format(file_path, iteration), 'wb') as f:
+        iteration = 0 if iteration is None else iteration
+        with open(f"{file_path}/buffer_{iteration:04d}", 'wb') as f:
             pickle.dump(self._buffer, f)
 
     def load_buffer(self, file_path='', iteration=None):
@@ -217,52 +216,13 @@ class Agent():
         FileNotFoundError
             If the requested file could not be located on the disk
         """
-        if(iteration is not None):
-            assert isinstance(iteration, int), "iteration should be an integer"
-        else:
-            iteration = 0
-        with open("{}/buffer_{:04d}".format(file_path, iteration), 'rb') as f:
+        iteration = 0 if iteration is None else iteration
+        with open(f"{file_path}/buffer_{iteration:04d}", 'rb') as f:
             self._buffer = pickle.load(f)
-
-    def _point_to_row_col(self, point):
-        """Covert a point value to row, col value
-        point value is the array index when it is flattened
-
-        Parameters
-        ----------
-        point : int
-            The point to convert
-
-        Returns
-        -------
-        (row, col) : tuple
-            Row and column values for the point
-        """
-        return (point//self._board_size, point%self._board_size)
-
-    def _row_col_to_point(self, row, col):
-        """Covert a (row, col) to value
-        point value is the array index when it is flattened
-
-        Parameters
-        ----------
-        row : int
-            The row number in array
-        col : int
-            The column number in array
-        Returns
-        -------
-        point : int
-            point value corresponding to the row and col values
-        """
-        return row*self._board_size + col
 
 class DeepQLearningAgent(Agent):
     """This agent learns the game via Q learning
     model outputs everywhere refers to Q values
-    This class extends to the following classes
-    PolicyGradientAgent
-    AdvantageActorCriticAgent
 
     Attributes
     ----------
@@ -272,23 +232,22 @@ class DeepQLearningAgent(Agent):
         Stores the target network graph of the DQN model
     """
     def __init__(self, board_size=10, frames=4, buffer_size=10000,
-                 gamma=0.99, n_actions=3, use_target_net=True,
-                 version=''):
+                 gamma=0.99, n_actions=3, use_target_net=True, version=''):
         """Initializer for DQN agent, arguments are same as Agent class
         except use_target_net is by default True and we call and additional
         reset models method to initialize the DQN networks
         """
-        Agent.__init__(self, board_size=board_size, frames=frames, buffer_size=buffer_size,
-                 gamma=gamma, n_actions=n_actions, use_target_net=use_target_net,
-                 version=version)
-        self.reset_models()
-
-    def reset_models(self):
-        """ Reset all the models by creating new graphs"""
-        self._model = self._agent_model()
-        if(self._use_target_net):
-            self._target_net = self._agent_model()
-            self.update_target_net()
+        super().__init__(board_size=board_size, frames=frames, buffer_size=buffer_size,
+                 gamma=gamma, n_actions=n_actions, use_target_net=use_target_net, version=version)
+        # Initialize the models, loss function, optimizer and device
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Using {self.device} for training")
+        self._model = self._agent_model().to(self.device)
+        self.optimizer = optim.Adam(self._model.parameters(), lr=0.001)
+        self.criterion = nn.SmoothL1Loss() # Huber Loss for PyTorch
+        if self._use_target_net:
+            self._target_net = self._agent_model().to(self.device)
+            self.update_target_net
 
     def _prepare_input(self, board):
         """Reshape input and normalize
@@ -303,10 +262,11 @@ class DeepQLearningAgent(Agent):
         board : Numpy array
             Processed and normalized board
         """
-        if(board.ndim == 3):
-            board = board.reshape((1,) + self._input_shape)
-        board = self._normalize_board(board.copy())
-        return board.copy()
+        board = board.astype(np.float32) / 4.0 # Normalize       
+        if board.ndim == 3:
+            board = np.expand_dims(board, axis=0) # Add batch dimension
+        board = torch.tensor(board).permute(0, 3, 1, 2).to(self.device) # (B, H, W, C) -> (B, C, H, W)
+        return board
 
     def _get_model_outputs(self, board, model=None):
         """Get action values from the DQN model
@@ -364,9 +324,14 @@ class DeepQLearningAgent(Agent):
         output : Numpy array
             Selected action using the argmax function
         """
-        # use the agent model to make the predictions
-        model_outputs = self._get_model_outputs(board, self._model)
-        return np.argmax(np.where(legal_moves==1, model_outputs, -np.inf), axis=1)
+        board = self._prepare_input(board)
+        
+        with torch.no_grad():
+            model_outputs = self._model(board).cpu().numpy()
+        
+        # Mask illegal moves with -inf and select the action with the maximum value
+        masked_outputs = np.where(legal_moves==1, model_outputs, -np.inf)
+        return np.argmax(masked_outputs, axis=1)
 
     def _agent_model(self):
         """Returns the model which evaluates Q values for a given state input
@@ -376,52 +341,18 @@ class DeepQLearningAgent(Agent):
         model : TensorFlow Graph
             DQN model graph
         """
-        # define the input layer, shape is dependent on the board size and frames
-        with open('model_config/{:s}.json'.format(self._version), 'r') as f:
-            m = json.loads(f.read())
-        
-        input_board = Input((self._board_size, self._board_size, self._n_frames,), name='input')
-        x = input_board
-        for layer in m['model']:
-            l = m['model'][layer]
-            if('Conv2D' in layer):
-                # add convolutional layer
-                x = Conv2D(**l)(x)
-            if('Flatten' in layer):
-                x = Flatten()(x)
-            if('Dense' in layer):
-                x = Dense(**l)(x)
-        out = Dense(self._n_actions, activation='linear', name='action_values')(x)
-        model = Model(inputs=input_board, outputs=out)
-        model.compile(optimizer=RMSprop(0.0005), loss=mean_huber_loss)
-                
-        """
-        input_board = Input((self._board_size, self._board_size, self._n_frames,), name='input')
-        x = Conv2D(16, (3,3), activation='relu', data_format='channels_last')(input_board)
-        x = Conv2D(32, (3,3), activation='relu', data_format='channels_last')(x)
-        x = Conv2D(64, (6,6), activation='relu', data_format='channels_last')(x)
-        x = Flatten()(x)
-        x = Dense(64, activation = 'relu', name='action_prev_dense')(x)
-        # this layer contains the final output values, activation is linear since
-        # the loss used is huber or mse
-        out = Dense(self._n_actions, activation='linear', name='action_values')(x)
-        # compile the model
-        model = Model(inputs=input_board, outputs=out)
-        model.compile(optimizer=RMSprop(0.0005), loss=mean_huber_loss)
-        # model.compile(optimizer=RMSprop(0.0005), loss='mean_squared_error')
-        """
+        return DQNModel(self._board_size, self._n_frames, self._n_actions, self._version)
 
-        return model
 
     def set_weights_trainable(self):
         """Set selected layers to non trainable and compile the model"""
-        for layer in self._model.layers:
-            layer.trainable = False
+        for param in self._model.parameters():
+            param.requires_grad = False
         # the last dense layers should be trainable
-        for s in ['action_prev_dense', 'action_values']:
-            self._model.get_layer(s).trainable = True
-        self._model.compile(optimizer = self._model.optimizer, 
-                            loss = self._model.loss)
+        for name, param in self._model.named_parameters():
+            if 'action_prev_dense' in name or 'action_values' in name:
+                param.requires_grad = True
+
 
 
     def get_action_proba(self, board, values=None):
@@ -439,13 +370,15 @@ class DeepQLearningAgent(Agent):
         model_outputs : Numpy array
             Action probabilities, shape is board.shape[0] * n_actions
         """
-        model_outputs = self._get_model_outputs(board, self._model)
-        # subtracting max and taking softmax does not change output
-        # do this for numerical stability
-        model_outputs = np.clip(model_outputs, -10, 10)
-        model_outputs = model_outputs - model_outputs.max(axis=1).reshape((-1,1))
-        model_outputs = np.exp(model_outputs)
-        model_outputs = model_outputs/model_outputs.sum(axis=1).reshape((-1,1))
+        # Prepare the input
+        board = self._prepare_input(board)
+        
+        # Forward pass through the model
+        with torch.no_grad():
+            model_outputs = self._model(board).cpu()
+            
+        # Subtracting max for numerical stability, then taking softmax
+        model_outputs = torch.softmax(model_outputs, dim=1).cpu().numpy()
         return model_outputs
 
     def save_model(self, file_path='', iteration=None):
@@ -461,13 +394,10 @@ class DeepQLearningAgent(Agent):
         iteration : int, optional
             Iteration number to tag the file name with, if None, iteration is 0
         """
-        if(iteration is not None):
-            assert isinstance(iteration, int), "iteration should be an integer"
-        else:
-            iteration = 0
-        self._model.save_weights(f"{file_path}/model_{iteration:04d}.weights.h5")
+        iteration = 0 if iteration is None else iteration
+        torch.save(self._model.state_dict(), f"{file_path}/model_{iteration:04d}.pt")
         if(self._use_target_net):
-            self._target_net.save_weights("{}/model_{:04d}_target.weights.h5".format(file_path, iteration))
+            torch.save(self._target_net.state_dict(), f"{file_path}/model_{iteration:04d}_target.pt")
 
     def load_model(self, file_path='', iteration=None):
         """ load any existing models, if available """
@@ -487,24 +417,20 @@ class DeepQLearningAgent(Agent):
             The file is not loaded if not found and an error message is printed,
             this error does not affect the functioning of the program
         """
-        if(iteration is not None):
-            assert isinstance(iteration, int), "iteration should be an integer"
-        else:
-            iteration = 0
-        self._model.load_weights("{}/model_{:04d}.weights.h5".format(file_path, iteration))
+        iteration = 0 if iteration is None else iteration
+        self._model.load_state_dict(torch.load(f"{file_path}/model_{iteration:04d}.pt", map_location=self.device))
         if(self._use_target_net):
-            self._target_net.load_weights("{}/model_{:04d}_target.weights.h5".format(file_path, iteration))
-        # print("Couldn't locate models at {}, check provided path".format(file_path))
+            self._target_net.load_state_dict(torch.load(f"{file_path}/model_{iteration:04d}_target.pt", map_location=self.device))
 
     def print_models(self):
         """Print the current models using summary method"""
         print('Training Model')
-        print(self._model.summary())
+        print(self._model)
         if(self._use_target_net):
             print('Target Network')
-            print(self._target_net.summary())
+            print(self._target_net)
 
-    def train_agent(self, batch_size=32, num_games=1, reward_clip=False):
+    def train_agent(self, batch_size=32, reward_clip=False):
         """Train the model by sampling from buffer and return the error.
         We are predicting the expected future discounted reward for all
         actions with our model. The target for training the model is calculated
@@ -533,35 +459,55 @@ class DeepQLearningAgent(Agent):
             loss : float
             The current error (error metric is defined in reset_models)
         """
+        # Sample a batch of experiences
         s, a, r, next_s, done, legal_moves = self._buffer.sample(batch_size)
-        if(reward_clip):
-            r = np.sign(r)
-        # calculate the discounted reward, and then train accordingly
-        current_model = self._target_net if self._use_target_net else self._model
-        next_model_outputs = self._get_model_outputs(next_s, current_model)
-        # our estimate of expexted future discounted reward
-        discounted_reward = r + \
-            (self._gamma * np.max(np.where(legal_moves==1, next_model_outputs, -np.inf), 
-                                  axis = 1)\
-                                  .reshape(-1, 1)) * (1-done)
-        # create the target variable, only the column with action has different value
-        target = self._get_model_outputs(s)
-        # we bother only with the difference in reward estimate at the selected action
         
-
-        target = (1-a)*target + a*discounted_reward
-        # fit
-        loss = self._model.train_on_batch(self._normalize_board(s), target)
-        # loss = round(loss, 5)
-        return loss
+        # Convert to PyTorch tensors and move to device
+        s = self._prepare_input(s) # Current state
+        next_s = self._prepare_input(next_s) # Next state
+        a = torch.tensor(a, dtype=torch.long).to(self.device) # Actions
+        r = torch.tensor(r, dtype=torch.float32).to(self.device) # Rewards
+        done = torch.tensor(done, dtype=torch.float32).to(self.device) # Game over indicator
+        legal_moves = torch.tensor(legal_moves, dtype=torch.bool).to(self.device) # Legal moves mask
+        gamma_tensor = torch.tensor(self._gamma, dtype=torch.float32).to(self.device) # Discount factor
+        
+        if(reward_clip):
+            r = torch.sign(r) # Clip rewards to -1, 0, 1 if enabled
+        
+        # Approximate Q-values for the current state
+        model_outputs = self._model(s)
+        
+        # Approximate Q-values for the next state
+        with torch.no_grad():
+            next_model_outputs = self._target_net(next_s) if self._use_target_net else self._model(next_s)
+        
+        # Mask illegal moves with -inf and select the action with the maximum value
+        max_model_output_index = torch.argmax(torch.where(legal_moves, model_outputs, float("-inf")), dim=1)
+        max_model_output = next_model_outputs[torch.arange(next_model_outputs.shape[0]), max_model_output_index]
+        
+        # Compute target Q-values (expected Q-values) using the Bellman equation
+        expected_value = r.squeeze() + gamma_tensor * max_model_output * (1 - done.squeeze())
+        
+        # Compute Q-values for the actions taken
+        output_q_value = model_outputs[torch.arange(model_outputs.size(0)), torch.argmax(a, dim=1)]
+        
+        # Compute loss
+        loss = self.criterion(output_q_value, expected_value)
+        
+        # Backpropagation
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        return loss.item()
 
     def update_target_net(self):
         """Update the weights of the target network, which is kept
         static for a few iterations to stabilize the other network.
         This should not be updated very frequently
         """
-        if(self._use_target_net):
-            self._target_net.set_weights(self._model.get_weights())
+        if self._use_target_net:
+            self._target_net.load_state_dict(self._model.state_dict())
 
     def compare_weights(self):
         """Simple utility function to check if the model and target 
