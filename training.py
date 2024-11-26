@@ -34,7 +34,7 @@ obstacles = bool(config['obstacles'])
 buffer_size = config['buffer_size']
 
 # Define Training Parameters
-episodes = 2_000 # Total number of episodes
+episodes = 100_000 # Total number of episodes
 log_frequency = 500 # Frequency of logging metrics
 games_eval = 8 # Number of games for evaluation
 epsilon, epsilon_end = 1, 0.01 # Epsilon range for Epsilon Greedy Policy

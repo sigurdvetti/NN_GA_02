@@ -165,6 +165,27 @@ class Agent():
         self._buffer = ReplayBufferNumpy(self._buffer_size, self._board_size, 
                                     self._n_frames, self._n_actions)
 
+    def load_buffer(self, file_path='', iteration=None):
+        """Load the buffer from disk
+        
+        Parameters
+        ----------
+        file_path : str, optional
+            Disk location to fetch the buffer from
+        iteration : int, optional
+            Iteration number to use in case the file has been tagged
+            with one, 0 if iteration is None
+
+        Raises
+        ------
+        FileNotFoundError
+            If the requested file could not be located on the disk
+        """
+        iteration = 0 if iteration is None else iteration
+        with open(f"{file_path}/buffer_{iteration:04d}", 'rb') as f:
+            self._buffer = pickle.load(f)
+
+    # Currently used in play_game2 (to fill the buffer with experiences)
     def add_to_buffer(self, board, action, reward, next_board, done, legal_moves):
         """Add current game step to the replay buffer
 
@@ -185,40 +206,6 @@ class Agent():
         """
         self._buffer.add_to_buffer(board, action, reward, next_board, 
                                    done, legal_moves)
-
-    def save_buffer(self, file_path='', iteration=None):
-        """Save the buffer to disk
-
-        Parameters
-        ----------
-        file_path : str, optional
-            The location to save the buffer at
-        iteration : int, optional
-            Iteration number to tag the file name with, if None, iteration is 0
-        """
-        iteration = 0 if iteration is None else iteration
-        with open(f"{file_path}/buffer_{iteration:04d}", 'wb') as f:
-            pickle.dump(self._buffer, f)
-
-    def load_buffer(self, file_path='', iteration=None):
-        """Load the buffer from disk
-        
-        Parameters
-        ----------
-        file_path : str, optional
-            Disk location to fetch the buffer from
-        iteration : int, optional
-            Iteration number to use in case the file has been tagged
-            with one, 0 if iteration is None
-
-        Raises
-        ------
-        FileNotFoundError
-            If the requested file could not be located on the disk
-        """
-        iteration = 0 if iteration is None else iteration
-        with open(f"{file_path}/buffer_{iteration:04d}", 'rb') as f:
-            self._buffer = pickle.load(f)
 
 class DeepQLearningAgent(Agent):
     """This agent learns the game via Q learning
@@ -297,23 +284,6 @@ class DeepQLearningAgent(Agent):
         
         return model_outputs
 
-    def _normalize_board(self, board):
-        """Normalize the board before input to the network
-        
-        Parameters
-        ----------
-        board : Numpy array
-            The board state to normalize
-
-        Returns
-        -------
-        board : Numpy array
-            The copy of board state after normalization
-        """
-        # return board.copy()
-        # return((board/128.0 - 1).copy())
-        return board.astype(np.float32)/4.0
-
     def move(self, board, legal_moves, value=None):
         """Get the action with maximum Q value
         
@@ -346,45 +316,8 @@ class DeepQLearningAgent(Agent):
         model : TensorFlow Graph
             DQN model graph
         """
+        # Return the DQN (nn.module) model previously defined
         return DQNModel(self._board_size, self._n_frames, self._n_actions, self._version)
-
-
-    def set_weights_trainable(self):
-        """Set selected layers to non trainable and compile the model"""
-        for param in self._model.parameters():
-            param.requires_grad = False
-        # the last dense layers should be trainable
-        for name, param in self._model.named_parameters():
-            if 'action_prev_dense' in name or 'action_values' in name:
-                param.requires_grad = True
-
-
-
-    def get_action_proba(self, board, values=None):
-        """Returns the action probability values using the DQN model
-
-        Parameters
-        ----------
-        board : Numpy array
-            Board state on which to calculate action probabilities
-        values : None, optional
-            Kept for consistency with other agent classes
-        
-        Returns
-        -------
-        model_outputs : Numpy array
-            Action probabilities, shape is board.shape[0] * n_actions
-        """
-        # Prepare the input
-        board = self._prepare_input(board)
-        
-        # Forward pass through the model
-        with torch.no_grad():
-            model_outputs = self._model(board).cpu()
-            
-        # Subtracting max for numerical stability, then taking softmax
-        model_outputs = torch.softmax(model_outputs, dim=1).cpu().numpy()
-        return model_outputs
 
     def save_model(self, file_path='', iteration=None):
         """Save the current models to disk using tensorflow's
@@ -514,22 +447,81 @@ class DeepQLearningAgent(Agent):
         if self._use_target_net:
             self._target_net.load_state_dict(self._model.state_dict())
 
+
+
+
+    ##################################################################
+    # The following methods are converted to PyTorch, but are not    #
+    # currently required in the assignment, hence they are commented #
+    ##################################################################
+
+
+    # Currently not used
     def compare_weights(self):
         """Simple utility function to check if the model and target 
         network have the same weights or not
         """
-        for i in range(len(self._model.layers)):
-            for j in range(len(self._model.layers[i].weights)):
-                c = (self._model.layers[i].weights[j].numpy() == \
-                     self._target_net.layers[i].weights[j].numpy()).all()
-                print('Layer {:d} Weights {:d} Match : {:d}'.format(i, j, int(c)))
+        for i, (param_model, param_target) in enumerate(zip(self._model.parameters(), self._target_net.parameters())):
+            match = torch.equal(param_model, param_target)
+            print(f'Layer {i} Match: {int(match)}')
 
+    # Currently not used
     def copy_weights_from_agent(self, agent_for_copy):
         """Update weights between competing agents which can be used
         in parallel training
         """
-        assert isinstance(agent_for_copy, self), "Agent type is required for copy"
+        assert isinstance(agent_for_copy, type(self)), "Agent type mismatch for copying weights"
+        self._model.load_state_dict(agent_for_copy._model.state_dict())
+        self._target_net.load_state_dict(agent_for_copy._target_net.state_dict())
 
-        self._model.set_weights(agent_for_copy._model.get_weights())
-        self._target_net.set_weights(agent_for_copy._model_pred.get_weights())
+    # Currently not used
+    def get_action_proba(self, board, values=None):
+        """Returns the action probability values using the DQN model
+
+        Parameters
+        ----------
+        board : Numpy array
+            Board state on which to calculate action probabilities
+        values : None, optional
+            Kept for consistency with other agent classes
         
+        Returns
+        -------
+        model_outputs : Numpy array
+            Action probabilities, shape is board.shape[0] * n_actions
+        """
+        # Prepare the input
+        board = self._prepare_input(board)
+        
+        # Forward pass through the model
+        with torch.no_grad():
+            model_outputs = self._model(board).cpu()
+            
+        # Subtracting max for numerical stability, then taking softmax
+        model_outputs = torch.softmax(model_outputs, dim=1).cpu().numpy()
+        return model_outputs
+    
+    # Currently not used
+    def set_weights_trainable(self):
+        """Set selected layers to non trainable and compile the model"""
+        for param in self._model.parameters():
+            param.requires_grad = False
+        # the last dense layers should be trainable
+        for name, param in self._model.named_parameters():
+            if 'action_prev_dense' in name or 'action_values' in name:
+                param.requires_grad = True
+
+    # Currently not used
+    def save_buffer(self, file_path='', iteration=None): 
+        """Save the buffer to disk
+
+        Parameters
+        ----------
+        file_path : str, optional
+            The location to save the buffer at
+        iteration : int, optional
+            Iteration number to tag the file name with, if None, iteration is 0
+        """
+        iteration = 0 if iteration is None else iteration
+        with open(f"{file_path}/buffer_{iteration:04d}", 'wb') as f:
+            pickle.dump(self._buffer, f)
