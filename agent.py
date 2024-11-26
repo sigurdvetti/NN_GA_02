@@ -275,21 +275,26 @@ class DeepQLearningAgent(Agent):
         ----------
         board : Numpy array
             The board state for which to predict action values
-        model : TensorFlow Graph, optional
-            The graph to use for prediction, model or target network
+        model : PyTorch model, optional
+            The model to use for prediction, default is self._model
 
         Returns
         -------
         model_outputs : Numpy array
-            Predicted model outputs on board, 
-            of shape board.shape[0] * num actions
+            Predicted model outputs on board,
+            of shape (board.shape[0], num_actions)
         """
-        # to correct dimensions and normalize
+        # Prepare the input by normalizing and converting to tensor
         board = self._prepare_input(board)
-        # the default model to use
+        
+        # Use the default model if none is provided
         if model is None:
             model = self._model
-        model_outputs = model.predict_on_batch(board)
+        
+        # Forward pass through the model to get predictions
+        with torch.no_grad():  # No gradients required for inference
+            model_outputs = model(board).cpu().numpy()  # Convert tensor to numpy
+        
         return model_outputs
 
     def _normalize_board(self, board):
