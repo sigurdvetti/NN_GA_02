@@ -5,19 +5,13 @@ Script for training the agent for snake using various methods
 import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-import numpy as np
 from tqdm import tqdm
-from collections import deque
 import pandas as pd
 import time
 from utils import play_game2
-from game_environment import Snake, SnakeNumpy
-import tensorflow as tf
+from game_environment import SnakeNumpy
 from agent import DeepQLearningAgent
 import json
-
-# Set the seed for reproducibility 
-tf.random.set_seed(42)
 
 # Load the training configuration
 version = 'v17.1'
@@ -34,7 +28,7 @@ obstacles = bool(config['obstacles'])
 buffer_size = config['buffer_size']
 
 # Define Training Parameters
-episodes = 100_000 # Total number of episodes
+episodes = 200_000 # Total number of episodes
 log_frequency = 500 # Frequency of logging metrics
 games_eval = 8 # Number of games for evaluation
 epsilon, epsilon_end = 1, 0.01 # Epsilon range for Epsilon Greedy Policy
@@ -51,8 +45,6 @@ agent = DeepQLearningAgent(
     buffer_size=buffer_size, 
     version=version
 )
-
-# agent.print_models()
 
 # Load pretrained model and buffer if supervised learning is enabled
 if(supervised):
@@ -88,8 +80,6 @@ else:
         total_frames=initial_games * 64
     )
     print(f'Initial buffer filled with {initial_games * 64} frames in {time.time() - start_time:.2f} seconds.')
-
-# decay = np.exp(np.log((epsilon_end/epsilon))/episodes)
 
 # Set up the environments for training and evaluation
 env_train = SnakeNumpy(

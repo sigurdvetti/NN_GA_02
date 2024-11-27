@@ -208,14 +208,14 @@ class Agent():
                                    done, legal_moves)
 
 class DeepQLearningAgent(Agent):
-    """This agent learns the game via Q learning
+    """This agent learns the game via DeepQ learning
     model outputs everywhere refers to Q values
 
     Attributes
     ----------
-    _model : TensorFlow Graph
+    _model : DQNModel
         Stores the graph of the DQN model
-    _target_net : TensorFlow Graph
+    _target_net : DQNModel
         Stores the target network graph of the DQN model
     """
     def __init__(self, board_size=10, frames=4, buffer_size=10000,
@@ -313,15 +313,15 @@ class DeepQLearningAgent(Agent):
 
         Returns
         -------
-        model : TensorFlow Graph
+        model : DQNModel
             DQN model graph
         """
         # Return the DQN (nn.module) model previously defined
         return DQNModel(self._board_size, self._n_frames, self._n_actions, self._version)
 
     def save_model(self, file_path='', iteration=None):
-        """Save the current models to disk using tensorflow's
-        inbuilt save model function (saves in h5 format)
+        """Save the current models to disk using pytorch's
+        inbuilt save model function (saves in pt format)
         saving weights instead of model as cannot load compiled
         model with any kind of custom object (loss or metric)
         
@@ -339,8 +339,8 @@ class DeepQLearningAgent(Agent):
 
     def load_model(self, file_path='', iteration=None):
         """ load any existing models, if available """
-        """Load models from disk using tensorflow's
-        inbuilt load model function (model saved in h5 format)
+        """Load models from disk using pytorch's
+        inbuilt load model function (model saved in pt format)
         
         Parameters
         ----------
